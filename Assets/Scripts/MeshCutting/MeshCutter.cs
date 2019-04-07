@@ -86,11 +86,106 @@ public class MeshCutter
         if (addedPairs.Count > 0)
         {
             //FillBoundaryGeneral(addedPairs);
-            FillBoundaryFace(addedPairs);
+            DetectFacesAndFill(addedPairs);
+            //FillBoundaryFace(addedPairs);
             return true;
-        } else
+        }
+        else
         {
             throw new UnityException("Error: if added pairs is empty, we should have returned false earlier");
+        }
+    }
+
+    /// <summary>
+    /// This is not meant to be efficient, it's a proof of concept of supporting multiple faces that result from a split
+    /// </summary>
+    void DetectFacesAndFill(List<Vector3> addedPairs)
+    {
+        // Turn the list of vertex pairs into a list of edges
+        List<Edge> edges = new List<Edge>();
+        for (int i = 0; i < addedPairs.Count; i += 2)
+        {
+            edges.Add(new Edge(addedPairs[i], addedPairs[i + 1]));
+        }
+
+        // Compute adjacency of the edges
+        for (int i = 0; i < edges.Count; i++)
+        {
+            var sourceEdge = edges[i];
+
+            // Compute A adjacency first
+            for (int j = 0; j < edges.Count; j++)
+            {
+                if (i == j) continue;
+
+                var targetEdge = edges[j];
+
+                if (targetEdge.B == sourceEdge.A)
+                {
+                    sourceEdge.EdgeAdjacentToA = targetEdge;
+                    break;
+                }
+                else if(targetEdge.A == sourceEdge.A)
+                {
+                    targetEdge.Flip(); // Target edge matches but is wrong way round, so flip it
+                    sourceEdge.EdgeAdjacentToA = targetEdge;
+                    break;
+                }
+            }
+
+            // Compute B adjacency first
+            for (int j = 0; j < edges.Count; j++)
+            {
+                if (i == j) continue;
+
+                var targetEdge = edges[j];
+                if (targetEdge.A == sourceEdge.B)
+                {
+                    sourceEdge.EdgeAdjacentToB = targetEdge;
+                    break;
+                }
+                else if (targetEdge.B == sourceEdge.B)
+                {
+                    targetEdge.Flip(); // Target edge matches but is wrong way round, so flip it
+                    sourceEdge.EdgeAdjacentToB = targetEdge;
+                    break;
+                }
+            }
+
+            if(sourceEdge.EdgeAdjacentToA == null || sourceEdge.EdgeAdjacentToB == null)
+            {
+                Debug.LogError("Could not compute adjacency for an edge");
+            }
+        }
+
+        // Calculate islands
+        List<List<Edge>> islands = new List<List<Edge>>();
+        for (int i = 0; i < edges.Count; i++)
+        {
+            List<Edge> island = new List<Edge>();
+
+            Edge sourceEdge = edges[0];
+            Edge activeEdge = sourceEdge;
+            do
+            {
+                island.Add(activeEdge);
+                edges.Remove(activeEdge);
+                activeEdge = activeEdge.EdgeAdjacentToB;
+            }
+            while (activeEdge != sourceEdge);
+            if(island.Count > 0)
+                islands.Add(island);
+        }
+
+        foreach (List<Edge> island in islands)
+        {
+            List<Vector3> vertices = new List<Vector3>(island.Count);
+            foreach (var pair in island)
+            {
+                vertices.Add(pair.A);
+                vertices.Add(pair.B);
+            }
+            FillBoundaryFace(vertices);
         }
     }
 
@@ -135,7 +230,7 @@ public class MeshCutter
 
     private void FillBoundaryFace(List<Vector3> added)
     {
-        // 1. Reorder added so in order ot their occurence along the perimeter.
+        // 1. Reorder added so in order of their occurence along the perimeter.
         MeshUtils.ReorderList(added);
 
         // 2. Find actual face vertices
@@ -201,6 +296,6 @@ public class MeshCutter
         NegativeMesh.AddTriangle(tempTriangle);
     }
     #endregion
-    
+
 }
 
