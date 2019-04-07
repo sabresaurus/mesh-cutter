@@ -180,12 +180,35 @@ public class MeshCutter
         foreach (List<Edge> island in islands)
         {
             List<Vector3> vertices = new List<Vector3>(island.Count);
-            foreach (var pair in island)
+            foreach (Edge pair in island)
             {
                 vertices.Add(pair.A);
-                vertices.Add(pair.B);
             }
-            FillBoundaryFace(vertices);
+
+            Vector3 center = Vector3.zero;
+            foreach (Vector3 vertex in vertices)
+            {
+                center += vertex;
+            }
+            center /= vertices.Count;
+
+            //Create triangle for each edge to the center
+            tempTriangle[2] = center;
+
+            for (int i = 0; i < vertices.Count; i ++)
+            {
+                // Add fronface triangle in meshPositive
+                tempTriangle[0] = vertices[i];
+                tempTriangle[1] = vertices[(i + 1) % vertices.Count];
+
+                PositiveMesh.AddTriangle(tempTriangle);
+
+                // Add backface triangle in meshNegative
+                tempTriangle[0] = vertices[(i + 1) % vertices.Count];
+                tempTriangle[1] = vertices[i];
+
+                NegativeMesh.AddTriangle(tempTriangle);
+            }
         }
     }
 
