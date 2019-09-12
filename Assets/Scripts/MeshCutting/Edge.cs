@@ -5,6 +5,10 @@ public class Edge
     Vector3 a;
     Vector3 b;
 
+    // TODO: This should be per vert
+    BoneWeight boneWeight;
+
+
     /// <summary>
     /// Adjacent edge to A
     /// </summary>
@@ -37,10 +41,19 @@ public class Edge
         }
     }
 
-    public Edge(Vector3 a, Vector3 b)
+    public BoneWeight BoneWeight
+    {
+        get
+        {
+            return boneWeight;
+        }
+    }
+
+    public Edge(Vector3 a, Vector3 b, BoneWeight boneWeight)
     {
         this.a = a;
         this.b = b;
+        this.boneWeight = boneWeight;
     }
 
     /// <summary>

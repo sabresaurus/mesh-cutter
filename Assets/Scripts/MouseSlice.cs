@@ -96,8 +96,24 @@ public class MouseSlice : MonoBehaviour {
 
     bool SliceObject(ref Plane slicePlane, GameObject obj, List<Transform> positiveObjects, List<Transform> negativeObjects)
     {
-        var mesh = obj.GetComponent<MeshFilter>().mesh;
-
+        MeshFilter meshFilter = obj.GetComponent<MeshFilter>();
+        SkinnedMeshRenderer skinnedMeshRenderer = obj.GetComponent<SkinnedMeshRenderer>();
+        Mesh mesh;
+        if(meshFilter != null)
+        {
+            mesh = meshFilter.mesh;   
+        }
+        else if(skinnedMeshRenderer != null)
+        {
+            // Create a copy because SkinnedMeshRenderer doesn't have a mesh accessor that creates a new mesh
+            mesh = Instantiate(skinnedMeshRenderer.sharedMesh);
+            skinnedMeshRenderer.sharedMesh = mesh;
+        }
+        else
+        {
+            throw new System.NotSupportedException("Could not find a source mesh");
+        }
+        
         if (!meshCutter.SliceMesh(mesh, ref slicePlane))
         {
             // Put object in the respective list
@@ -125,9 +141,11 @@ public class MouseSlice : MonoBehaviour {
         }
 
         // Create new Sliced object with the other mesh
-        GameObject newObject = Instantiate(obj, ObjectContainer);
-        newObject.transform.SetPositionAndRotation(obj.transform.position, obj.transform.rotation);
-        var newObjMesh = newObject.GetComponent<MeshFilter>().mesh;
+        Transform sourceParent = obj.transform.parent;
+        GameObject newObject = Instantiate(sourceParent.gameObject, ObjectContainer);
+        newObject.transform.SetPositionAndRotation(sourceParent.position + slicePlane.normal * 0.1f, sourceParent.rotation);
+        var newObjMesh = new Mesh();
+        newObject.GetComponentInChildren<SkinnedMeshRenderer>().sharedMesh = newObjMesh;
 
         // Put the bigger mesh in the original object
         // TODO: Enable collider generation (either the exact mesh or compute smallest enclosing sphere)
@@ -135,7 +153,7 @@ public class MouseSlice : MonoBehaviour {
         ReplaceMesh(newObjMesh, smallerMesh);
 
         (posBigger ? positiveObjects : negativeObjects).Add(obj.transform);
-        (posBigger ? negativeObjects : positiveObjects).Add(newObject.transform);
+        (posBigger ? negativeObjects : positiveObjects).Add(newObject.GetComponentInChildren<SkinnedMeshRenderer>().transform);
 
         return true;
     }
@@ -146,12 +164,18 @@ public class MouseSlice : MonoBehaviour {
     /// </summary>
     void ReplaceMesh(Mesh mesh, TempMesh tempMesh, MeshCollider collider = null)
     {
+        Debug.Log(mesh.boneWeights.Length);
+        Debug.Log(mesh.vertices.Length);
+        Debug.Log(tempMesh.vertices.Count);
+
         mesh.Clear();
         mesh.SetVertices(tempMesh.vertices);
         mesh.SetTriangles(tempMesh.triangles, 0);
         mesh.SetNormals(tempMesh.normals);
         mesh.SetUVs(0, tempMesh.uvs);
-        
+        mesh.boneWeights = tempMesh.boneWeights.ToArray();
+        mesh.bindposes = tempMesh.bindposes;
+
         //mesh.RecalculateNormals();
         mesh.RecalculateTangents();
 

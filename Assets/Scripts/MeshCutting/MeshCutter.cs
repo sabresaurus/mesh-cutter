@@ -1,7 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-
+using Sabresaurus.SabreCSG;
 public class MeshCutter
 {
 
@@ -9,11 +9,13 @@ public class MeshCutter
     public TempMesh NegativeMesh { get; private set; }
 
     private List<Vector3> addedPairs;
+    private List<BoneWeight> addedBoneWeights;
 
     private readonly List<Vector3> ogVertices;
     private readonly List<int> ogTriangles;
     private readonly List<Vector3> ogNormals;
     private readonly List<Vector2> ogUvs;
+    private readonly List<BoneWeight> ogBoneWeights;
 
     private readonly Vector3[] intersectPair;
     private readonly Vector3[] tempTriangle;
@@ -28,9 +30,11 @@ public class MeshCutter
         NegativeMesh = new TempMesh(initialArraySize);
 
         addedPairs = new List<Vector3>(initialArraySize);
+        addedBoneWeights = new List<BoneWeight>(initialArraySize);
         ogVertices = new List<Vector3>(initialArraySize);
         ogNormals = new List<Vector3>(initialArraySize);
         ogUvs = new List<Vector2>(initialArraySize);
+        ogBoneWeights = new List<BoneWeight>(initialArraySize);
         ogTriangles = new List<int>(initialArraySize * 3);
 
         intersectPair = new Vector3[2];
@@ -58,18 +62,25 @@ public class MeshCutter
         mesh.GetTriangles(ogTriangles, 0);
         mesh.GetNormals(ogNormals);
         mesh.GetUVs(0, ogUvs);
-
+        mesh.GetBoneWeights(ogBoneWeights);
+        
+        Matrix4x4[] bindposes = mesh.bindposes;
+        
         PositiveMesh.Clear();
         NegativeMesh.Clear();
         addedPairs.Clear();
+        addedBoneWeights.Clear();
+
+        PositiveMesh.SetBindposes(bindposes);
+        NegativeMesh.SetBindposes(bindposes);
 
         // 2. Separate old vertices in new meshes
-        for(int i = 0; i < ogVertices.Count; ++i)
+        for (int i = 0; i < ogVertices.Count; ++i)
         {
             if (slice.GetDistanceToPoint(ogVertices[i]) >= 0)
-                PositiveMesh.AddVertex(ogVertices, ogNormals, ogUvs, i);
+                PositiveMesh.AddVertex(ogVertices, ogNormals, ogUvs, ogBoneWeights, i);
             else
-                NegativeMesh.AddVertex(ogVertices, ogNormals, ogUvs, i);
+                NegativeMesh.AddVertex(ogVertices, ogNormals, ogUvs, ogBoneWeights, i);
         }
 
         // 2.5 : If one of the mesh has no vertices, then it doesn't intersect
@@ -79,14 +90,23 @@ public class MeshCutter
         // 3. Separate triangles and cut those that intersect the plane
         for (int i = 0; i < ogTriangles.Count; i += 3)
         {
-            if (intersect.TrianglePlaneIntersect(ogVertices, ogUvs, ogTriangles, i, ref slice, PositiveMesh, NegativeMesh, intersectPair))
+            if (intersect.TrianglePlaneIntersect(ogVertices, 
+                                                 ogUvs,
+                                                 ogBoneWeights,
+                                                 ogTriangles,
+                                                 i,
+                                                 ref slice, PositiveMesh, NegativeMesh, intersectPair))
+            {
                 addedPairs.AddRange(intersectPair);
+
+                addedBoneWeights.Add(ogBoneWeights[ogTriangles[i]]);
+            }
         }
 
         if (addedPairs.Count > 0)
         {
             //FillBoundaryGeneral(addedPairs);
-            DetectFacesAndFill(addedPairs);
+            DetectFacesAndFill(addedPairs, addedBoneWeights);
             //FillBoundaryFace(addedPairs);
             return true;
         }
@@ -99,13 +119,13 @@ public class MeshCutter
     /// <summary>
     /// This is not meant to be efficient, it's a proof of concept of supporting multiple faces that result from a split
     /// </summary>
-    void DetectFacesAndFill(List<Vector3> addedPairs)
+    void DetectFacesAndFill(List<Vector3> addedPairs, List<BoneWeight> addedBoneWeights)
     {
         // Turn the list of vertex pairs into a list of edges
         List<Edge> edges = new List<Edge>();
         for (int i = 0; i < addedPairs.Count; i += 2)
         {
-            edges.Add(new Edge(addedPairs[i], addedPairs[i + 1]));
+            edges.Add(new Edge(addedPairs[i], addedPairs[i + 1], addedBoneWeights[i/2]));
         }
 
         // Compute adjacency of the edges
@@ -155,6 +175,7 @@ public class MeshCutter
             if(sourceEdge.EdgeAdjacentToA == null || sourceEdge.EdgeAdjacentToB == null)
             {
                 Debug.LogError("Could not compute adjacency for an edge");
+                return;
             }
         }
 
@@ -179,6 +200,7 @@ public class MeshCutter
 
         foreach (List<Edge> island in islands)
         {
+            BoneWeight boneWeight = island[0].BoneWeight;
             List<Vector3> vertices = new List<Vector3>(island.Count);
             foreach (Edge pair in island)
             {
@@ -201,13 +223,13 @@ public class MeshCutter
                 tempTriangle[0] = vertices[i];
                 tempTriangle[1] = vertices[(i + 1) % vertices.Count];
 
-                PositiveMesh.AddTriangle(tempTriangle);
+                PositiveMesh.AddTriangle(tempTriangle, boneWeight);
 
                 // Add backface triangle in meshNegative
                 tempTriangle[0] = vertices[(i + 1) % vertices.Count];
                 tempTriangle[1] = vertices[i];
 
-                NegativeMesh.AddTriangle(tempTriangle);
+                NegativeMesh.AddTriangle(tempTriangle, boneWeight);
             }
         }
     }
@@ -224,100 +246,100 @@ public class MeshCutter
     #region Boundary fill method
 
 
-    private void FillBoundaryGeneral(List<Vector3> added)
-    {
-        // 1. Reorder added so in order ot their occurence along the perimeter.
-        MeshUtils.ReorderList(added);
+    //private void FillBoundaryGeneral(List<Vector3> added)
+    //{
+    //    // 1. Reorder added so in order ot their occurence along the perimeter.
+    //    MeshUtils.ReorderList(added);
 
-        Vector3 center = MeshUtils.FindCenter(added);
+    //    Vector3 center = MeshUtils.FindCenter(added);
 
-        //Create triangle for each edge to the center
-        tempTriangle[2] = center;
+    //    //Create triangle for each edge to the center
+    //    tempTriangle[2] = center;
 
-        for (int i = 0; i < added.Count; i += 2)
-        {
-            // Add fronface triangle in meshPositive
-            tempTriangle[0] = added[i];
-            tempTriangle[1] = added[i + 1];
+    //    for (int i = 0; i < added.Count; i += 2)
+    //    {
+    //        // Add fronface triangle in meshPositive
+    //        tempTriangle[0] = added[i];
+    //        tempTriangle[1] = added[i + 1];
 
-            PositiveMesh.AddTriangle(tempTriangle);
+    //        PositiveMesh.AddTriangle(tempTriangle);
 
-            // Add backface triangle in meshNegative
-            tempTriangle[0] = added[i + 1];
-            tempTriangle[1] = added[i];
+    //        // Add backface triangle in meshNegative
+    //        tempTriangle[0] = added[i + 1];
+    //        tempTriangle[1] = added[i];
 
-            NegativeMesh.AddTriangle(tempTriangle);
-        }
-    }
+    //        NegativeMesh.AddTriangle(tempTriangle);
+    //    }
+    //}
 
 
-    private void FillBoundaryFace(List<Vector3> added)
-    {
-        // 1. Reorder added so in order of their occurence along the perimeter.
-        MeshUtils.ReorderList(added);
+    //private void FillBoundaryFace(List<Vector3> added)
+    //{
+    //    // 1. Reorder added so in order of their occurence along the perimeter.
+    //    MeshUtils.ReorderList(added);
 
-        // 2. Find actual face vertices
-        var face = FindRealPolygon(added);
+    //    // 2. Find actual face vertices
+    //    var face = FindRealPolygon(added);
 
-        // 3. Create triangle fans
-        int t_fwd = 0,
-            t_bwd = face.Count - 1,
-            t_new = 1;
-        bool incr_fwd = true;
+    //    // 3. Create triangle fans
+    //    int t_fwd = 0,
+    //        t_bwd = face.Count - 1,
+    //        t_new = 1;
+    //    bool incr_fwd = true;
 
-        while (t_new != t_fwd && t_new != t_bwd)
-        {
-            AddTriangle(face, t_bwd, t_fwd, t_new);
+    //    while (t_new != t_fwd && t_new != t_bwd)
+    //    {
+    //        AddTriangle(face, t_bwd, t_fwd, t_new);
 
-            if (incr_fwd) t_fwd = t_new;
-            else t_bwd = t_new;
+    //        if (incr_fwd) t_fwd = t_new;
+    //        else t_bwd = t_new;
 
-            incr_fwd = !incr_fwd;
-            t_new = incr_fwd ? t_fwd + 1 : t_bwd - 1;
-        }
-    }
+    //        incr_fwd = !incr_fwd;
+    //        t_new = incr_fwd ? t_fwd + 1 : t_bwd - 1;
+    //    }
+    //}
 
-    /// <summary>
-    /// Extract polygon from the pairs of vertices.
-    /// Per example, two vectors that are colinear is redundant and only forms one side of the polygon
-    /// </summary>
-    private List<Vector3> FindRealPolygon(List<Vector3> pairs)
-    {
-        List<Vector3> vertices = new List<Vector3>();
-        Vector3 edge1, edge2;
+    ///// <summary>
+    ///// Extract polygon from the pairs of vertices.
+    ///// Per example, two vectors that are colinear is redundant and only forms one side of the polygon
+    ///// </summary>
+    //private List<Vector3> FindRealPolygon(List<Vector3> pairs)
+    //{
+    //    List<Vector3> vertices = new List<Vector3>();
+    //    Vector3 edge1, edge2;
 
-        // List should be ordered in the correct way
-        for (int i = 0; i < pairs.Count; i += 2)
-        {
-            edge1 = (pairs[i + 1] - pairs[i]);
-            if (i == pairs.Count - 2)
-                edge2 = pairs[1] - pairs[0];
-            else
-                edge2 = pairs[i + 3] - pairs[i + 2];
+    //    // List should be ordered in the correct way
+    //    for (int i = 0; i < pairs.Count; i += 2)
+    //    {
+    //        edge1 = (pairs[i + 1] - pairs[i]);
+    //        if (i == pairs.Count - 2)
+    //            edge2 = pairs[1] - pairs[0];
+    //        else
+    //            edge2 = pairs[i + 3] - pairs[i + 2];
 
-            // Normalize edges
-            edge1.Normalize();
-            edge2.Normalize();
+    //        // Normalize edges
+    //        edge1.Normalize();
+    //        edge2.Normalize();
 
-            if (Vector3.Angle(edge1, edge2) > threshold)
-                // This is a corner
-                vertices.Add(pairs[i + 1]);
-        }
+    //        if (Vector3.Angle(edge1, edge2) > threshold)
+    //            // This is a corner
+    //            vertices.Add(pairs[i + 1]);
+    //    }
 
-        return vertices;
-    }
+    //    return vertices;
+    //}
 
-    private void AddTriangle(List<Vector3> face, int t1, int t2, int t3)
-    {
-        tempTriangle[0] = face[t1];
-        tempTriangle[1] = face[t2];
-        tempTriangle[2] = face[t3];
-        PositiveMesh.AddTriangle(tempTriangle);
+    //private void AddTriangle(List<Vector3> face, int t1, int t2, int t3)
+    //{
+    //    tempTriangle[0] = face[t1];
+    //    tempTriangle[1] = face[t2];
+    //    tempTriangle[2] = face[t3];
+    //    PositiveMesh.AddTriangle(tempTriangle);
 
-        tempTriangle[1] = face[t3];
-        tempTriangle[2] = face[t2];
-        NegativeMesh.AddTriangle(tempTriangle);
-    }
+    //    tempTriangle[1] = face[t3];
+    //    tempTriangle[2] = face[t2];
+    //    NegativeMesh.AddTriangle(tempTriangle);
+    //}
     #endregion
 
 }

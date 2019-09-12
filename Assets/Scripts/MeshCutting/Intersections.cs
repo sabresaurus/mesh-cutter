@@ -28,6 +28,7 @@ public class Intersections
     // Initialize fixed arrays so that we don't initialize them every time we call TrianglePlaneIntersect
     private readonly Vector3[] v;
     private readonly Vector2[] u;
+    private readonly BoneWeight[] bW;
     private readonly int[] t;
     private readonly bool[] positive;
 
@@ -38,6 +39,7 @@ public class Intersections
     {
         v = new Vector3[3];
         u = new Vector2[3];
+        bW = new BoneWeight[3];
         t = new int[3];
         positive = new bool[3];
     }
@@ -45,7 +47,10 @@ public class Intersections
     /// <summary>
     /// Find intersection between a plane and a line segment defined by vectors first and second.
     /// </summary>
-    public ValueTuple<Vector3, Vector2> Intersect(Plane plane, Vector3 first, Vector3 second, Vector2 uv1, Vector2 uv2)
+    public ValueTuple<Vector3, Vector2, BoneWeight> Intersect(Plane plane, 
+                                                  Vector3 first, Vector3 second,
+                                                  Vector2 uv1, Vector2 uv2,
+                                                  BoneWeight bW1, BoneWeight bw2)
     {
         edgeRay.origin = first;
         edgeRay.direction = (second - first).normalized;
@@ -59,7 +64,7 @@ public class Intersections
             // Intersect outside of line segment
             throw new UnityException("Intersect outside of line");
 
-        var returnVal = new ValueTuple<Vector3, Vector2>
+        var returnVal = new ValueTuple<Vector3, Vector2, BoneWeight>
         {
             Item1 = edgeRay.GetPoint(dist)
         };
@@ -68,6 +73,7 @@ public class Intersections
         // Compute new uv by doing Linear interpolation between uv1 and uv2
         returnVal.Item2.x = Mathf.Lerp(uv1.x, uv2.x, relativeDist);
         returnVal.Item2.y = Mathf.Lerp(uv1.y, uv2.y, relativeDist);
+        returnVal.Item3 = bW1; // HACK: Should lerp the two
         return returnVal;
     }
 
@@ -85,7 +91,11 @@ public class Intersections
      *       |___________________
      */
 
-    public bool TrianglePlaneIntersect(List<Vector3> vertices, List<Vector2> uvs, List<int> triangles, int startIdx, ref Plane plane, TempMesh posMesh, TempMesh negMesh, Vector3[] intersectVectors)
+    public bool TrianglePlaneIntersect(List<Vector3> vertices,
+                                       List<Vector2> uvs,
+                                       List<BoneWeight> boneWeights,
+                                       List<int> triangles,
+                                       int startIdx, ref Plane plane, TempMesh posMesh, TempMesh negMesh, Vector3[] intersectVectors)
     {
         int i;
 
@@ -95,6 +105,7 @@ public class Intersections
             t[i] = triangles[startIdx + i];
             v[i] = vertices[t[i]];
             u[i] = uvs[t[i]];
+            bW[i] = boneWeights[t[i]];
         }
 
         // Store wether the vertex is on positive mesh
@@ -124,15 +135,15 @@ public class Intersections
         if (nextPoint == 3) nextPoint = 0;
 
         // Get the 2 intersection points
-        ValueTuple<Vector3, Vector2> newPointPrev = Intersect(plane, v[lonelyPoint], v[prevPoint], u[lonelyPoint], u[prevPoint]);
-        ValueTuple<Vector3, Vector2> newPointNext = Intersect(plane, v[lonelyPoint], v[nextPoint], u[lonelyPoint], u[nextPoint]);
+        ValueTuple<Vector3, Vector2, BoneWeight> newPointPrev = Intersect(plane, v[lonelyPoint], v[prevPoint], u[lonelyPoint], u[prevPoint], bW[lonelyPoint], bW[prevPoint]);
+        ValueTuple<Vector3, Vector2, BoneWeight> newPointNext = Intersect(plane, v[lonelyPoint], v[nextPoint], u[lonelyPoint], u[nextPoint], bW[lonelyPoint], bW[nextPoint]);
 
         //Set the new triangles and store them in respective tempmeshes
-        (positive[lonelyPoint] ? posMesh : negMesh).AddSlicedTriangle(t[lonelyPoint], newPointNext.Item1, newPointPrev.Item1, newPointNext.Item2, newPointPrev.Item2);
+        (positive[lonelyPoint] ? posMesh : negMesh).AddSlicedTriangle(t[lonelyPoint], newPointNext.Item1, newPointPrev.Item1, newPointNext.Item2, newPointPrev.Item2, newPointNext.Item3, newPointPrev.Item3);
 
-        (positive[prevPoint] ? posMesh : negMesh).AddSlicedTriangle(t[prevPoint], newPointPrev.Item1, newPointPrev.Item2, t[nextPoint]);
+        (positive[prevPoint] ? posMesh : negMesh).AddSlicedTriangle(t[prevPoint], newPointPrev.Item1, newPointPrev.Item2, newPointPrev.Item3, t[nextPoint]);
 
-        (positive[prevPoint] ? posMesh : negMesh).AddSlicedTriangle(t[nextPoint], newPointPrev.Item1, newPointNext.Item1, newPointPrev.Item2, newPointNext.Item2);
+        (positive[prevPoint] ? posMesh : negMesh).AddSlicedTriangle(t[nextPoint], newPointPrev.Item1, newPointNext.Item1, newPointPrev.Item2, newPointNext.Item2, newPointPrev.Item3, newPointNext.Item3);
 
         // We return the edge that will be in the correct orientation for the positive side mesh
         if (positive[lonelyPoint])
